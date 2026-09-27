@@ -1,0 +1,6 @@
+node_modules/
+uploads/
+output/
+photos/
+*.log
+.DS_Store

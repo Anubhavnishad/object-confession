@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title> Object Confession</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; display: grid; place-items: center;
+    background: radial-gradient(1200px 600px at 50% -10%, #000000, #0c080581 60%);
+    color: #f3ead7;
+    font-family: ui-serif, Georgia, "Iowan Old Style", serif;
+  }
+  .wrap { width: min(760px, 92vw); padding: 32px 0 64px; }
+  h1 {
+    text-align: center; font-weight: 600; letter-spacing: .12em;
+    font-size: 22px; margin: 0 0 4px; text-transform: uppercase;
+  }
+  .sub { text-align: center; opacity: .55; font-style: italic; margin: 0 0 28px; }
+  .drop {
+    border: 1.5px dashed #8a6b3d; border-radius: 14px; padding: 28px;
+    text-align: center; cursor: pointer; transition: .15s ease;
+    background: rgba(255,235,200,.02);
+    display: flex; flex-direction: column; align-items: center; gap: 12px;
+  }
+  .drop:hover, .drop.hot { border-color: #d9a35a; background: rgba(255,235,200,.06); }
+  .drop img { max-width: 100%; max-height: 260px; border-radius: 10px; }
+  .drop .hint { opacity: .6; font-size: 14px; }
+  button {
+    display: block; margin: 22px auto 0; padding: 12px 28px;
+    background: #d9a35a; color: #241408; border: 0; border-radius: 999px;
+    font-size: 15px; font-weight: 700; letter-spacing: .06em; cursor: pointer;
+    text-transform: uppercase;
+  }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+  .confession {
+    margin-top: 28px; padding: 22px 26px; border-left: 3px solid #d9a35a;
+    background: rgba(255,235,200,.03); border-radius: 6px;
+    white-space: pre-wrap; line-height: 1.55; font-size: 17px;
+    min-height: 40px;
+  }
+  .status { text-align: center; opacity: .55; margin-top: 14px; font-size: 14px; }
+  audio { width: 100%; margin-top: 22px; }
+  .err { color: #ffb3b3; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Object Confession</h1>
+  <p class="sub">Point at anything. It has a story to tell.</p>
+
+  <label class="drop" id="drop">
+    <input type="file" id="file" accept="image/*" hidden />
+  </label>
+
+  <button id="go" disabled>Confess</button>
+
+  <div class="confession" id="confession" hidden></div>
+  <audio id="player" controls hidden></audio>
+  <div class="status" id="status"></div>
+</div>
+
+<script>
+const fileEl   = document.getElementById('file');
+const dropEl   = document.getElementById('drop');
+const goBtn    = document.getElementById('go');
+const confEl   = document.getElementById('confession');
+const player   = document.getElementById('player');
+const statusEl = document.getElementById('status');
+
+let chosen = null;
+
+const imgEl = document.createElement('img');
+imgEl.style.display = 'none';
+imgEl.alt = 'Selected object';
+
+const hintEl = document.createElement('div');
+hintEl.className = 'hint';
+hintEl.textContent = 'Drop an image here, or click to choose one';
+
+dropEl.appendChild(imgEl);
+dropEl.appendChild(hintEl);
+
+function pick(f) {
+  chosen = f;
+  imgEl.src = URL.createObjectURL(f);
+  imgEl.style.display = 'block';
+  hintEl.style.display = 'none';
+  goBtn.disabled = false;
+  confEl.hidden = true;
+  player.hidden = true;
+  statusEl.textContent = '';
+  statusEl.classList.remove('err');
+}
+
+fileEl.onchange = e => e.target.files[0] && pick(e.target.files[0]);
+
+['dragover','dragenter'].forEach(ev =>
+  dropEl.addEventListener(ev, e => { e.preventDefault(); dropEl.classList.add('hot'); }));
+['dragleave','drop'].forEach(ev =>
+  dropEl.addEventListener(ev, e => { e.preventDefault(); dropEl.classList.remove('hot'); }));
+dropEl.addEventListener('drop', e => {
+  const f = e.dataTransfer.files?.[0];
+  if (f && f.type.startsWith('image/')) pick(f);
+});
+
+goBtn.onclick = async () => {
+  if (!chosen) return;
+  goBtn.disabled = true;
+  statusEl.textContent = 'The object is thinking…';
+  statusEl.classList.remove('err');
+  confEl.hidden = true;
+  player.hidden = true;
+
+  try {
+    const fd = new FormData();
+    fd.append('image', chosen);
+    const r = await fetch('/api/confess', { method: 'POST', body: fd });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || 'Request failed');
+
+    confEl.textContent = j.confession;
+    confEl.hidden = false;
+    player.src = j.audioUrl;
+    player.hidden = false;
+    player.play().catch(() => {});
+    statusEl.textContent = 'Done.';
+  } catch (err) {
+    statusEl.textContent = err.message;
+    statusEl.classList.add('err');
+  } finally {
+    goBtn.disabled = false;
+  }
+};
+</script>
+</body>
+</html>
