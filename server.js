@@ -8,132 +8,198 @@ import {
   textToSpeech,
   SMOLVLM2_500M_MULTIMODAL_Q8_0,
   MMPROJ_SMOLVLM2_500M_MULTIMODAL_Q8_0,
-  TTS_MULTILINGUAL_SUPERTONIC3_Q8_0,
+  TTS_MULTILINGUAL_SUPERTONIC3_Q8_0
 } from '@qvac/sdk';
 
-fs.mkdirSync('./uploads', { recursive: true });
-fs.mkdirSync('./output',  { recursive: true });
+const PORT = 3000;
+const uploadDir = path.resolve('uploads');
+const audioDir = path.resolve('output');
 
-const upload = multer({ dest: './uploads/' });
+fs.mkdirSync(uploadDir, { recursive: true });
+fs.mkdirSync(audioDir, { recursive: true });
+
 const app = express();
-app.use(express.static('public'));
-app.use('/audio', express.static('output'));
+const upload = multer({ dest: uploadDir });
 
-function writeWav(filePath, samples, sampleRate) {
-  const n = samples.length;
-  const buf = Buffer.alloc(44 + n * 2);
-  buf.write('RIFF', 0);
-  buf.writeUInt32LE(36 + n * 2, 4);
-  buf.write('WAVE', 8);
-  buf.write('fmt ', 12);
-  buf.writeUInt32LE(16, 16);
-  buf.writeUInt16LE(1, 20);
-  buf.writeUInt16LE(1, 22);
-  buf.writeUInt32LE(sampleRate, 24);
-  buf.writeUInt32LE(sampleRate * 2, 28);
-  buf.writeUInt16LE(2, 32);
-  buf.writeUInt16LE(16, 34);
-  buf.write('data', 36);
-  buf.writeUInt32LE(n * 2, 40);
-  for (let i = 0; i < n; i++) {
-    buf.writeInt16LE(Math.max(-32768, Math.min(32767, samples[i])), 44 + i * 2);
+app.use(express.static('public'));
+app.use('/audio', express.static(audioDir));
+
+let visionModel;
+let speechModel;
+
+const confessionPrompt = `
+Look at the uploaded image and identify the main everyday object.
+
+Write a short humorous confession from the object's own point of view.
+
+Format:
+OBJECT: <object name>
+CONFESSION: <2 or 3 sentences>
+
+Rules:
+- Maximum 60 words.
+- Mention at least one visible physical detail.
+- Mention something humans do with or around the object.
+- Make the voice personal, petty, and slightly annoyed.
+- Keep it grounded in ordinary life.
+- Do not discuss the universe, destiny, civilizations, politics, or philosophy.
+`;
+
+function createWav(file, samples, rate) {
+  const buffer = Buffer.alloc(44 + samples.length * 2);
+
+  buffer.write('RIFF', 0);
+  buffer.writeUInt32LE(36 + samples.length * 2, 4);
+  buffer.write('WAVE', 8);
+  buffer.write('fmt ', 12);
+  buffer.writeUInt32LE(16, 16);
+  buffer.writeUInt16LE(1, 20);
+  buffer.writeUInt16LE(1, 22);
+  buffer.writeUInt32LE(rate, 24);
+  buffer.writeUInt32LE(rate * 2, 28);
+  buffer.writeUInt16LE(2, 32);
+  buffer.writeUInt16LE(16, 34);
+  buffer.write('data', 36);
+  buffer.writeUInt32LE(samples.length * 2, 40);
+
+  for (let i = 0; i < samples.length; i++) {
+    const value = Math.max(-32768, Math.min(32767, samples[i]));
+    buffer.writeInt16LE(value, 44 + i * 2);
   }
-  fs.writeFileSync(filePath, buf);
+
+  fs.writeFileSync(file, buffer);
 }
 
-let visionId, ttsId;
+async function loadLocalModels() {
+  console.log('Loading local QVAC vision model...');
 
-const PROMPT =
-  'You are looking at a photo of an everyday object. ' +
-  'Write a SHORT first-person confession as if THAT specific object is speaking.\n\n' +
-  'RULES:\n' +
-  '- Start with exactly: "OBJECT: <name>" on the first line.\n' +
-  '- Then write "CONFESSION: " on the next line.\n' +
-  '- The confession must be 2-3 sentences, max 60 words.\n' +
-  '- It must mention SPECIFIC things about being that object: its material, its shape, what humans do to it, where it sits.\n' +
-  '- Be petty, personal, and slightly bitter. NOT cosmic. NOT philosophical.\n' +
-  '- No empires, no civilizations, no universe, no fate.\n\n' +
-  'EXAMPLE (mug):\n' +
-  'OBJECT: mug\n' +
-  'CONFESSION: I am the mug. Every morning you grab me with cold hands and leave me half-full in the sink by noon. I have watched you pick the red mug twice this week. I am not jealous. I am just tired.\n\n' +
-  'Now do the same for the object in this image.';
-
-async function boot() {
-  console.log('-> Loading vision model...');
-  visionId = await loadModel({
+  visionModel = await loadModel({
     modelSrc: SMOLVLM2_500M_MULTIMODAL_Q8_0,
     modelType: 'llm',
     modelConfig: {
       projectionModelSrc: MMPROJ_SMOLVLM2_500M_MULTIMODAL_Q8_0,
-      ctx_size: 2048,
-    },
+      ctx_size: 2048
+    }
   });
 
-  console.log('-> Loading TTS voice...');
-  ttsId = await loadModel({
+  console.log('Loading local QVAC speech model...');
+
+  speechModel = await loadModel({
     modelSrc: TTS_MULTILINGUAL_SUPERTONIC3_Q8_0.src,
     modelType: 'tts',
-    modelConfig: { ttsEngine: 'supertonic', language: 'en' },
+    modelConfig: {
+      ttsEngine: 'supertonic',
+      language: 'en'
+    }
   });
 
-  console.log('Models ready.');
+  console.log('Local QVAC models are ready.');
+}
+
+async function generateConfession(imagePath) {
+  const result = completion({
+    modelId: visionModel,
+    history: [
+      {
+        role: 'user',
+        content: confessionPrompt,
+        attachments: [{ path: imagePath }]
+      }
+    ],
+    stream: true,
+    temp: 0.45,
+    top_p: 0.9,
+    predict: 120
+  });
+
+  let response = '';
+
+  for await (const token of result.tokenStream) {
+    response += token;
+  }
+
+  const confessionMatch = response.match(
+    /CONFESSION:\s*([\s\S]*)/i
+  );
+
+  const confession = (
+    confessionMatch ? confessionMatch[1] : response
+  ).trim();
+
+  if (!confession) {
+    throw new Error('QVAC did not return a confession.');
+  }
+
+  return confession;
+}
+
+async function createSpeech(text) {
+  const result = await textToSpeech({
+    modelId: speechModel,
+    text,
+    inputType: 'text',
+    stream: false
+  });
+
+  const samples = await result.buffer;
+  const sampleRate = (await result.sampleRate) || 44100;
+
+  if (!Array.isArray(samples) || samples.length === 0) {
+    throw new Error('QVAC did not return audio samples.');
+  }
+
+  const filename = `object-${Date.now()}.wav`;
+  const filepath = path.join(audioDir, filename);
+
+  createWav(filepath, samples, sampleRate);
+
+  return `/audio/${filename}`;
 }
 
 app.post('/api/confess', upload.single('image'), async (req, res) => {
-  if (!req.file) return res.status(400).json({ error: 'No image uploaded.' });
+  if (!req.file) {
+    return res.status(400).json({
+      error: 'Please upload an image.'
+    });
+  }
+
   const imagePath = req.file.path;
 
   try {
-    const run = completion({
-      modelId: visionId,
-      history: [
-        { role: 'user', content: PROMPT, attachments: [{ path: imagePath }] },
-      ],
-      stream: true,
-      temp: 0.4,
-      top_p: 0.9,
-      predict: 120,
+    console.log('Analyzing uploaded object with QVAC...');
+
+    const confession = await generateConfession(imagePath);
+
+    console.log('Creating local speech with QVAC...');
+
+    const audioUrl = await createSpeech(confession);
+
+    res.json({
+      confession,
+      audioUrl
     });
-    let raw = '';
-    for await (const token of run.tokenStream) raw += token;
+  } catch (error) {
+    console.error('Object confession failed:', error);
 
-    const match = raw.match(/CONFESSION:\s*([\s\S]+)/i);
-    const confession = (match ? match[1] : raw).trim();
-    if (!confession) throw new Error('No confession generated.');
-
-    const audio = await textToSpeech({
-      modelId: ttsId,
-      text: confession,
-      inputType: 'text',
-      stream: false,
+    res.status(500).json({
+      error: error?.message || 'Something went wrong.'
     });
-
-    const samples = await audio.buffer;
-    const sampleRate = (await audio.sampleRate) || 44100;
-    if (!Array.isArray(samples) || samples.length === 0) {
-      throw new Error('TTS returned no samples.');
-    }
-
-    const wavName = `confession-${Date.now()}.wav`;
-    const wavPath = path.resolve('./output', wavName);
-    writeWav(wavPath, samples, sampleRate);
-
-    res.json({ confession, audioUrl: `/audio/${wavName}` });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: err?.message ?? String(err) });
   } finally {
-    fs.unlink(imagePath, () => {});
+    fs.rm(imagePath, { force: true }, () => {});
   }
 });
 
-boot()
-  .then(() => {
-    app.listen(3000, () => {
-      console.log('\nOpen http://localhost:3000\n');
+async function start() {
+  try {
+    await loadLocalModels();
+
+    app.listen(PORT, () => {
+      console.log(`\nObject Confessional is running at http://localhost:${PORT}\n`);
     });
-  })
-  .catch((err) => {
-    console.error('Boot failed:', err);
+  } catch (error) {
+    console.error('Unable to start application:', error);
     process.exit(1);
-  });
+  }
+}
+
+start();
