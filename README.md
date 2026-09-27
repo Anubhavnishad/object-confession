@@ -45,8 +45,9 @@ All inference runs on-device.
 ## Install
 
 &#x20;   git clone https://github.com/Anubhavnishad/object-confession
-    cd object-confession
-    npm install
+cd object-confession
+npm install
+
 
 
 \---
@@ -54,6 +55,7 @@ All inference runs on-device.
 ## Run
 
 &#x20;   node server.js
+
 
 
 Then open http://localhost:3000 in your browser.
@@ -134,4 +136,29 @@ Point at an object and let AI imagine what it would confess.
 ```bash
 
 npm install
+
+
+
+
+
+
+\## QVAC
+
+
+
+This project uses Tether's QVAC SDK to run AI inference locally on the user's device.
+
+
+
+The app uses QVAC for:
+
+\- Object understanding with an on-device vision model
+
+\- AI-generated object confessions
+
+\- On-device text-to-speech
+
+
+
+No cloud AI API is required for inference.
 
